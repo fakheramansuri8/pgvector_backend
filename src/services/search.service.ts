@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { PurchaseInvoice } from '../models/PurchaseInvoice.model';
+import { PurchaseInvoiceItem } from '../models/PurchaseInvoiceItem.model';
 import { EmbeddingService } from './embedding.service';
 import { Sequelize } from 'sequelize-typescript';
 import { Op, QueryTypes } from 'sequelize';
@@ -136,14 +137,22 @@ export class SearchService {
         throw new Error(`Invoice with id ${invoiceId} not found`);
       }
 
+      // Load items if not already loaded
+      const invoiceWithItems = await this.purchaseInvoiceModel.findByPk(invoiceId, {
+        include: [PurchaseInvoiceItem],
+      });
+
+      if (!invoiceWithItems) {
+        throw new Error(`Invoice with id ${invoiceId} not found`);
+      }
+
       const searchableText = this.embeddingService.generateSearchableText({
-        invoiceNumber: invoice.invoiceNumber,
-        invoiceDate: invoice.invoiceDate,
-        vendorName: invoice.vendorName,
-        vendorReference: invoice.vendorReference,
-        billNumber: invoice.billNumber,
-        narration: invoice.narration,
-        totalAmount: invoice.totalAmount,
+        invoiceDate: invoiceWithItems.invoiceDate,
+        vendorName: invoiceWithItems.vendorName,
+        totalAmount: invoiceWithItems.totalAmount,
+        items: invoiceWithItems.items?.map((item) => ({
+          productName: item.productName,
+        })),
       });
 
       const embedding = await this.embeddingService.generateEmbedding(searchableText);

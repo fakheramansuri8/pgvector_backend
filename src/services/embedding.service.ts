@@ -38,48 +38,44 @@ export class EmbeddingService {
   }
 
   generateSearchableText(invoice: {
-    invoiceNumber?: string;
     invoiceDate?: Date | string;
     vendorName?: string;
-    vendorReference?: string;
-    billNumber?: string;
-    narration?: string;
     totalAmount?: number;
+    items?: Array<{
+      productName?: string;
+    }>;
   }): string {
     const parts: string[] = [];
 
-    if (invoice.invoiceNumber) {
-      parts.push(`Purchase Invoice ${invoice.invoiceNumber}`);
+    // 1. Vendor name (clean, no prefix)
+    if (invoice.vendorName) {
+      parts.push(invoice.vendorName);
     }
 
+    // 2. Product names (from all items)
+    if (invoice.items && invoice.items.length > 0) {
+      const productNames = invoice.items
+        .map((item) => item.productName)
+        .filter((name) => name && name.trim().length > 0);
+      if (productNames.length > 0) {
+        parts.push(productNames.join('. '));
+      }
+    }
+
+    // 3. Total amount
+    if (invoice.totalAmount !== undefined && invoice.totalAmount !== null) {
+      parts.push(String(invoice.totalAmount));
+    }
+
+    // 4. Date (invoice date)
     if (invoice.invoiceDate) {
       const dateStr = typeof invoice.invoiceDate === 'string' 
         ? invoice.invoiceDate 
         : invoice.invoiceDate.toISOString().split('T')[0];
-      parts.push(`dated ${dateStr}`);
+      parts.push(dateStr);
     }
 
-    if (invoice.vendorName) {
-      parts.push(`from vendor ${invoice.vendorName}`);
-    }
-
-    if (invoice.vendorReference) {
-      parts.push(`with reference ${invoice.vendorReference}`);
-    }
-
-    if (invoice.billNumber) {
-      parts.push(`Bill number: ${invoice.billNumber}`);
-    }
-
-    if (invoice.narration) {
-      parts.push(`Narration: ${invoice.narration}`);
-    }
-
-    if (invoice.totalAmount) {
-      parts.push(`Total amount: ${invoice.totalAmount}`);
-    }
-
-    return parts.join('. ') + '.';
+    return parts.join('. ');
   }
 }
 

@@ -6,9 +6,11 @@ import {
   PrimaryKey,
   AutoIncrement,
   AllowNull,
+  HasMany,
   CreatedAt,
   UpdatedAt,
 } from 'sequelize-typescript';
+import { PurchaseInvoiceItem } from './PurchaseInvoiceItem.model';
 
 @Table({
   tableName: 'PurchaseInvoice',
@@ -71,16 +73,75 @@ export class PurchaseInvoice extends Model<PurchaseInvoice> {
 
   @AllowNull(true)
   @Column({
+    type: DataType.DATEONLY,
+  })
+  declare billDate: Date;
+
+  @AllowNull(true)
+  @Column({
+    type: DataType.STRING(50),
+  })
+  declare invoiceType: string;
+
+  @AllowNull(true)
+  @Column({
+    type: DataType.STRING(50),
+  })
+  declare taxNature: string;
+
+  @AllowNull(true)
+  @Column({
+    type: DataType.DATEONLY,
+  })
+  declare dueDate: Date;
+
+  @AllowNull(true)
+  @Column({
     type: DataType.TEXT,
   })
   declare narration: string;
 
   @AllowNull(true)
   @Column({
+    type: DataType.TEXT,
+  })
+  declare termsConditions: string;
+
+  // Financial fields
+  @AllowNull(false)
+  @Column({
+    type: DataType.DECIMAL(12, 2),
+    defaultValue: 0,
+  })
+  declare subtotal: number;
+
+  @AllowNull(false)
+  @Column({
+    type: DataType.DECIMAL(12, 2),
+    defaultValue: 0,
+  })
+  declare discountAmount: number;
+
+  @AllowNull(false)
+  @Column({
+    type: DataType.DECIMAL(12, 2),
+    defaultValue: 0,
+  })
+  declare taxAmount: number;
+
+  @AllowNull(false)
+  @Column({
     type: DataType.DECIMAL(12, 2),
     defaultValue: 0,
   })
   declare totalAmount: number;
+
+  @AllowNull(false)
+  @Column({
+    type: DataType.BOOLEAN,
+    defaultValue: false,
+  })
+  declare taxInclusive: boolean;
 
   @AllowNull(true)
   @Column({
@@ -88,6 +149,9 @@ export class PurchaseInvoice extends Model<PurchaseInvoice> {
     comment: 'Vector embedding for semantic search (stored as text array)',
   })
   declare embedding: string;
+
+  @HasMany(() => PurchaseInvoiceItem)
+  declare items: PurchaseInvoiceItem[];
 
   @CreatedAt
   @Column(DataType.DATE)

@@ -19,29 +19,33 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "migrate": "ts-node -r tsconfig-paths/register src/scripts/run-migration.ts",
+    "migrate:add-columns": "ts-node -r tsconfig-paths/register src/scripts/migrate-add-columns.ts",
+    "reset-db": "ts-node -r tsconfig-paths/register src/scripts/reset-database.ts",
     "sync-models": "ts-node -r tsconfig-paths/register src/scripts/sync-models.ts",
-    "check-db": "ts-node -r tsconfig-paths/register src/scripts/check-table.ts"
+    "check-db": "ts-node -r tsconfig-paths/register src/scripts/check-table.ts",
+    "generate-samples": "ts-node -r tsconfig-paths/register src/scripts/generate-sample-invoices.ts"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.21.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/sequelize": "^11.0.0",
-    "@google/generative-ai": "^0.21.0",
     "@sequelize/postgres": "^7.0.0-alpha.46",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.2",
     "pg": "^8.16.0",
     "pg-hstore": "^2.3.4",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "sequelize": "^6.37.7",
-    "sequelize-typescript": "^2.1.6",
-    "class-validator": "^0.14.2",
-    "class-transformer": "^0.5.1"
+    "sequelize-typescript": "^2.1.6"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.18.0",
+    "@faker-js/faker": "^10.1.0",
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",

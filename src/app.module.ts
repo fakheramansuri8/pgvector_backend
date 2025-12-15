@@ -5,6 +5,7 @@ import databaseConfig from './config/database.config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PurchaseInvoice } from './models/PurchaseInvoice.model';
+import { PurchaseInvoiceItem } from './models/PurchaseInvoiceItem.model';
 import { PurchaseInvoiceController } from './controllers/purchase-invoice.controller';
 import { PurchaseInvoiceService } from './services/purchase-invoice.service';
 import { EmbeddingService } from './services/embedding.service';
@@ -27,7 +28,7 @@ import { SearchService } from './services/search.service';
       },
       inject: [ConfigService],
     }),
-    SequelizeModule.forFeature([PurchaseInvoice]),
+    SequelizeModule.forFeature([PurchaseInvoice, PurchaseInvoiceItem]),
   ],
   controllers: [AppController, PurchaseInvoiceController],
   providers: [AppService, PurchaseInvoiceService, EmbeddingService, SearchService],
