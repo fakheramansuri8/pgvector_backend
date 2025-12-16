@@ -70,10 +70,7 @@ export class SearchService {
         limit: limit,
       };
 
-      if (filters.companyId) {
-        whereConditions.push('"companyId" = :companyId');
-        replacements.companyId = filters.companyId;
-      }
+      // companyId filter removed - search across all companies
 
       if (filters.branchId) {
         whereConditions.push('"branchId" = :branchId');
