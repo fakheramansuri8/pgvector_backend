@@ -82,6 +82,8 @@ export class PurchaseInvoiceController {
       branchId: searchDto.branchId,
       dateFrom: searchDto.dateFrom,
       dateTo: searchDto.dateTo,
+      amountMin: searchDto.amountMin,
+      amountMax: searchDto.amountMax,
       limit: searchDto.limit,
     });
   }

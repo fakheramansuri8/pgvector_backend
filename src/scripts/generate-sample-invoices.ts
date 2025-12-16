@@ -82,12 +82,10 @@ async function generateSampleInvoices(count: number = 500) {
           }
         }
         
-        // 3. Total amount
-        if (invoice.totalAmount !== undefined && invoice.totalAmount !== null) {
-          parts.push(String(invoice.totalAmount));
-        }
+        // Note: Amount is NOT included in embedding - it's handled via filters for better accuracy
+        // Amount embeddings don't work well for semantic search
         
-        // 4. Date (invoice date)
+        // 3. Date (invoice date)
         if (invoice.invoiceDate) {
           const dateStr = typeof invoice.invoiceDate === 'string' 
             ? invoice.invoiceDate 
