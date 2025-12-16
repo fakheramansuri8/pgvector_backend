@@ -91,6 +91,8 @@ export class QueryPreprocessingService {
     'his',
     'himself',
     'she',
+    'amount',
+    'amounts',
     'her',
     'hers',
     'herself',
@@ -679,19 +681,6 @@ export class QueryPreprocessingService {
       this.logger.warn(`Error extracting product names from query: ${query}`, error);
       return {};
     }
-  }
-
-  /**
-   * Removes vendor names from query
-   */
-  private removeVendorNames(query: string, vendorNames: string[]): string {
-    let cleaned = query;
-    for (const vendorName of vendorNames) {
-      // Create regex to match the vendor name (case insensitive, word boundaries)
-      const pattern = new RegExp(`\\b${vendorName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
-      cleaned = cleaned.replace(pattern, ' ');
-    }
-    return cleaned.trim();
   }
 
   /**
