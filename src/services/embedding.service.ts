@@ -37,6 +37,11 @@ export class EmbeddingService {
     }
   }
 
+  /**
+   * Generates searchable text for embedding from invoice data.
+   * ONLY includes vendor name and product names for semantic search.
+   * Dates and amounts are handled via SQL filters for exact matching.
+   */
   generateSearchableText(invoice: {
     invoiceDate?: Date | string;
     vendorName?: string;
@@ -47,33 +52,28 @@ export class EmbeddingService {
   }): string {
     const parts: string[] = [];
 
-    // 1. Vendor name (clean, no prefix)
-    if (invoice.vendorName) {
-      parts.push(invoice.vendorName);
+    // 1. Vendor name - primary search target
+    if (invoice.vendorName?.trim()) {
+      parts.push(invoice.vendorName.trim());
     }
 
     // 2. Product names (from all items)
     if (invoice.items && invoice.items.length > 0) {
       const productNames = invoice.items
-        .map((item) => item.productName)
-        .filter((name) => name && name.trim().length > 0);
+        .map((item) => item.productName?.trim())
+        .filter((name): name is string => !!name && name.length > 0);
       if (productNames.length > 0) {
         parts.push(productNames.join('. '));
       }
     }
 
-    // Note: Amount is NOT included in embedding - it's handled via filters for better accuracy
-    // Amount embeddings don't work well for semantic search
+    // NOTE: Date and Amount are NOT included in embedding
+    // They are handled via SQL WHERE clauses for exact/range matching
+    // Including them in embeddings dilutes semantic meaning of vendor/product names
 
-    // 3. Date (invoice date)
-    if (invoice.invoiceDate) {
-      const dateStr = typeof invoice.invoiceDate === 'string' 
-        ? invoice.invoiceDate 
-        : invoice.invoiceDate.toISOString().split('T')[0];
-      parts.push(dateStr);
-    }
-
-    return parts.join('. ');
+    const searchableText = parts.join('. ');
+    this.logger.debug(`[EMBEDDING] Searchable text: "${searchableText}"`);
+    return searchableText;
   }
 }
 

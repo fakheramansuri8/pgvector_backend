@@ -43,7 +43,10 @@
     "rxjs": "^7.8.1",
     "sequelize": "^6.37.7",
     "sequelize-typescript": "^2.1.6",
-    "stopword": "^3.1.5"
+    "stopword": "^3.1.5",
+    "wink-eng-lite-web-model": "^1.8.1",
+    "wink-ner": "^2.1.0",
+    "wink-nlp": "^2.4.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
