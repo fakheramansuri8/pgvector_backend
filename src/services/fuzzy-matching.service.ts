@@ -4,6 +4,8 @@ import Fuse from 'fuse.js';
 import { closest } from 'fastest-levenshtein';
 import { PurchaseInvoice } from '../models/PurchaseInvoice.model';
 import { PurchaseInvoiceItem } from '../models/PurchaseInvoiceItem.model';
+import { Sequelize } from 'sequelize-typescript';
+import { QueryTypes } from 'sequelize';
 
 interface FuzzyMatchResult {
   original: string;
@@ -53,6 +55,7 @@ export class FuzzyMatchingService {
     private readonly purchaseInvoiceModel: typeof PurchaseInvoice,
     @InjectModel(PurchaseInvoiceItem)
     private readonly invoiceItemModel: typeof PurchaseInvoiceItem,
+    private readonly sequelize: Sequelize,
   ) {
     // Combine all static words
     this.staticDictionary = [
@@ -63,7 +66,7 @@ export class FuzzyMatchingService {
   }
 
   /**
-   * Corrects typos in a query using fuzzy matching
+   * Corrects typos in a query using fuzzy matching and phonetic matching
    * @param query The original query with potential typos
    * @returns Corrected query
    */
@@ -80,7 +83,7 @@ export class FuzzyMatchingService {
     // 1. First try to match multi-word vendor/product names (most important)
     correctedQuery = this.correctMultiWordEntities(correctedQuery);
 
-    // 2. Then correct individual words (action words, domain words, etc.)
+    // 2. Then correct individual words using phonetic matching for names
     const words = correctedQuery.split(/(\s+)/);
     const correctedWords: string[] = [];
 
@@ -103,7 +106,8 @@ export class FuzzyMatchingService {
         continue;
       }
 
-      const corrected = this.correctSingleWord(word);
+      // Use async phonetic matching for proper correction of names
+      const corrected = await this.correctSingleWordAsync(word);
       correctedWords.push(corrected);
     }
 
@@ -197,7 +201,7 @@ export class FuzzyMatchingService {
   }
 
   /**
-   * Corrects a single word using static dictionary
+   * Corrects a single word using static dictionary (synchronous version for non-names)
    */
   private correctSingleWord(word: string): string {
     const wordLower = word.toLowerCase();
@@ -208,10 +212,10 @@ export class FuzzyMatchingService {
       return word;
     }
 
-    // 2. If word is capitalized (proper noun like "Deen"), try vendor/product matching FIRST
-    //    Don't match proper nouns against static dictionary (would turn "Deen" → "year")
+    // 2. If word is capitalized (proper noun like "Deen"), use Fuse.js for now
+    //    Phonetic matching is handled separately in correctSingleWordAsync
     if (isCapitalized) {
-      // Try single-word vendor name matching
+      // Try single-word vendor name matching using Fuse.js
       const vendorMatch = this.fuzzyMatchVendor(word);
       if (vendorMatch.wasChanged && vendorMatch.confidence > 0.6) {
         this.logger.debug(`[FUZZY] Vendor match: "${word}" → "${vendorMatch.corrected}"`);
@@ -252,6 +256,31 @@ export class FuzzyMatchingService {
 
     // No match found, return original
     return word;
+  }
+
+  /**
+   * Corrects a single word using phonetic matching (async version for names)
+   * Uses PostgreSQL fuzzystrmatch for phonetic similarity
+   */
+  private async correctSingleWordAsync(word: string): Promise<string> {
+    const wordLower = word.toLowerCase();
+    
+    // Skip phonetic matching for static dictionary words (action, domain, keyword words)
+    // These are common words like "invoice", "show", "from", etc.
+    if (this.staticDictionary.includes(wordLower)) {
+      return this.correctSingleWord(word);
+    }
+
+    // Try phonetic matching for any word that could be a name
+    // (both capitalized like "Gowrav" and lowercase like "gowrav")
+    const phoneticMatch = await this.phoneticMatchVendor(word);
+    if (phoneticMatch.wasChanged && phoneticMatch.confidence > 0.5) {
+      this.logger.debug(`[PHONETIC] Vendor match: "${word}" → "${phoneticMatch.corrected}" (confidence: ${phoneticMatch.confidence.toFixed(2)})`);
+      return phoneticMatch.corrected;
+    }
+
+    // Fall back to synchronous matching
+    return this.correctSingleWord(word);
   }
 
   /**
@@ -342,6 +371,94 @@ export class FuzzyMatchingService {
     }
 
     return { original: word, corrected: word, wasChanged: false, confidence: 0 };
+  }
+
+  /**
+   * Phonetic match against vendor names using PostgreSQL fuzzystrmatch
+   * Uses Soundex + Levenshtein for best results with names
+   * Compares against first word of vendor name (first name) for better matching
+   */
+  async phoneticMatchVendor(word: string): Promise<FuzzyMatchResult> {
+    if (!this.sequelize || this.vendorList.length === 0) {
+      return { original: word, corrected: word, wasChanged: false, confidence: 0 };
+    }
+
+    try {
+      // Query PostgreSQL for phonetic matches
+      // Compare against first word (first name) of vendor name for better phonetic matching
+      // Prioritize: 1) Soundex match + low Levenshtein, 2) Metaphone match, 3) Just low Levenshtein
+      const results = await this.sequelize.query<{
+        vendor_name: string;
+        first_name: string;
+        soundex_match: boolean;
+        metaphone_match: boolean;
+        edit_distance: number;
+        phonetic_score: number;
+      }>(
+        `
+        SELECT 
+          "vendorName" as vendor_name,
+          SPLIT_PART("vendorName", ' ', 1) as first_name,
+          soundex(:word) = soundex(SPLIT_PART("vendorName", ' ', 1)) as soundex_match,
+          dmetaphone(:word) = dmetaphone(SPLIT_PART("vendorName", ' ', 1)) as metaphone_match,
+          levenshtein(LOWER(:word), LOWER(SPLIT_PART("vendorName", ' ', 1))) as edit_distance,
+          CASE 
+            WHEN soundex(:word) = soundex(SPLIT_PART("vendorName", ' ', 1)) THEN 
+              1.0 - (levenshtein(LOWER(:word), LOWER(SPLIT_PART("vendorName", ' ', 1)))::float / 
+                     GREATEST(LENGTH(:word), LENGTH(SPLIT_PART("vendorName", ' ', 1))))
+            WHEN dmetaphone(:word) = dmetaphone(SPLIT_PART("vendorName", ' ', 1)) THEN
+              0.8 - (levenshtein(LOWER(:word), LOWER(SPLIT_PART("vendorName", ' ', 1)))::float / 
+                     GREATEST(LENGTH(:word), LENGTH(SPLIT_PART("vendorName", ' ', 1))) * 0.5)
+            ELSE
+              0.5 - (levenshtein(LOWER(:word), LOWER(SPLIT_PART("vendorName", ' ', 1)))::float / 
+                     GREATEST(LENGTH(:word), LENGTH(SPLIT_PART("vendorName", ' ', 1))))
+          END as phonetic_score
+        FROM (SELECT DISTINCT "vendorName" FROM "PurchaseInvoice" WHERE "vendorName" IS NOT NULL) vendors
+        WHERE 
+          soundex(:word) = soundex(SPLIT_PART("vendorName", ' ', 1))
+          OR dmetaphone(:word) = dmetaphone(SPLIT_PART("vendorName", ' ', 1))
+          OR levenshtein(LOWER(:word), LOWER(SPLIT_PART("vendorName", ' ', 1))) <= 2
+        ORDER BY 
+          soundex_match DESC,
+          metaphone_match DESC,
+          edit_distance ASC
+        LIMIT 5
+        `,
+        {
+          replacements: { word },
+          type: QueryTypes.SELECT,
+        },
+      );
+
+      if (results.length > 0) {
+        const best = results[0];
+        
+        this.logger.log(
+          `[PHONETIC] Query "${word}" matched "${best.vendor_name}" (first_name: ${best.first_name}, soundex: ${best.soundex_match}, metaphone: ${best.metaphone_match}, score: ${best.phonetic_score.toFixed(2)})`,
+        );
+
+        // Accept if:
+        // 1. Soundex matches (phonetically similar) OR
+        // 2. Metaphone matches OR
+        // 3. Edit distance <= 2 and phonetic_score > 0.5
+        if (best.soundex_match || best.metaphone_match || (best.edit_distance <= 2 && best.phonetic_score > 0.5)) {
+          const confidence = Math.max(0, Math.min(1, best.phonetic_score));
+          return {
+            original: word,
+            corrected: best.vendor_name,
+            wasChanged: best.vendor_name.toLowerCase() !== word.toLowerCase(),
+            confidence,
+          };
+        }
+      } else {
+        this.logger.debug(`[PHONETIC] No matches found for "${word}"`);
+      }
+
+      return { original: word, corrected: word, wasChanged: false, confidence: 0 };
+    } catch (error) {
+      this.logger.warn(`[PHONETIC] Error in phonetic match: ${error}`);
+      return { original: word, corrected: word, wasChanged: false, confidence: 0 };
+    }
   }
 
   /**
