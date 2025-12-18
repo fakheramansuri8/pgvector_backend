@@ -48,8 +48,13 @@ export class SearchService {
       this.logger.log(`[SEARCH] Starting search with query: "${query}"`);
       this.logger.log(`[SEARCH] Provided filters:`, JSON.stringify(filters));
       
-      // Preprocess query to extract entities and normalize
-      const preprocessed = this.queryPreprocessingService.preprocessQuery(query);
+      // Preprocess query to extract entities and normalize (includes fuzzy matching)
+      const preprocessed = await this.queryPreprocessingService.preprocessQuery(query);
+      
+      // Log if query was corrected by fuzzy matching
+      if (preprocessed.correctedQuery) {
+        this.logger.log(`[SEARCH] Query corrected: "${preprocessed.originalQuery}" → "${preprocessed.correctedQuery}"`);
+      }
       
       // Use normalized query for embedding (without dates and amounts)
       const normalizedQuery = preprocessed.normalizedQuery?.trim() || '';

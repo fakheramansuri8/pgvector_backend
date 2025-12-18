@@ -11,6 +11,7 @@ import { PurchaseInvoiceService } from './services/purchase-invoice.service';
 import { EmbeddingService } from './services/embedding.service';
 import { SearchService } from './services/search.service';
 import { QueryPreprocessingService } from './services/query-preprocessing.service';
+import { FuzzyMatchingService } from './services/fuzzy-matching.service';
 
 @Module({
   imports: [
@@ -32,6 +33,6 @@ import { QueryPreprocessingService } from './services/query-preprocessing.servic
     SequelizeModule.forFeature([PurchaseInvoice, PurchaseInvoiceItem]),
   ],
   controllers: [AppController, PurchaseInvoiceController],
-  providers: [AppService, PurchaseInvoiceService, EmbeddingService, SearchService, QueryPreprocessingService],
+  providers: [AppService, PurchaseInvoiceService, EmbeddingService, SearchService, QueryPreprocessingService, FuzzyMatchingService],
 })
 export class AppModule {}

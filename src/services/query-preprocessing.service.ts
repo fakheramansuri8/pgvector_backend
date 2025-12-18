@@ -1,9 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import * as chrono from 'chrono-node';
 import nlp from 'compromise';
+import { FuzzyMatchingService } from './fuzzy-matching.service';
 
 export interface PreprocessedQuery {
   normalizedQuery: string;
+  originalQuery: string;
+  correctedQuery?: string;
   dateFrom?: string;
   dateTo?: string;
   amountMin?: number;
@@ -15,6 +18,11 @@ export interface PreprocessedQuery {
 @Injectable()
 export class QueryPreprocessingService {
   private readonly logger = new Logger(QueryPreprocessingService.name);
+
+  constructor(
+    @Inject(forwardRef(() => FuzzyMatchingService))
+    private readonly fuzzyMatchingService: FuzzyMatchingService,
+  ) {}
 
   // Month names for date parsing
   private readonly monthNames = [
@@ -184,22 +192,39 @@ export class QueryPreprocessingService {
 
   /**
    * Preprocesses a user query to extract entities and normalize for embedding
+   * Includes fuzzy matching to correct typos before entity extraction
    */
-  preprocessQuery(query: string): PreprocessedQuery {
+  async preprocessQuery(query: string): Promise<PreprocessedQuery> {
     this.logger.log(`[PREPROCESS] Original query: "${query}"`);
 
     if (!query || !query.trim()) {
       this.logger.log(`[PREPROCESS] Empty query, returning empty result`);
-      return { normalizedQuery: '' };
+      return { normalizedQuery: '', originalQuery: '' };
     }
 
-    const trimmedQuery = query.trim();
-    const originalQuery = trimmedQuery.toLowerCase();
-    let workingQuery = originalQuery;
-    this.logger.log(`[PREPROCESS] Lowercase query: "${workingQuery}"`);
+    const originalQueryText = query.trim();
+    
+    // Step 0: Apply fuzzy matching to correct typos
+    let correctedQuery: string | undefined;
+    let trimmedQuery = originalQueryText;
+    
+    try {
+      const fuzzyResult = await this.fuzzyMatchingService.correctQuery(originalQueryText);
+      if (fuzzyResult !== originalQueryText) {
+        correctedQuery = fuzzyResult;
+        trimmedQuery = fuzzyResult;
+        this.logger.log(`[PREPROCESS] Fuzzy corrected: "${originalQueryText}" → "${correctedQuery}"`);
+      }
+    } catch (error) {
+      this.logger.warn(`[PREPROCESS] Fuzzy matching failed, using original: ${error}`);
+    }
+
+    const lowerQuery = trimmedQuery.toLowerCase();
+    let workingQuery = lowerQuery;
+    this.logger.log(`[PREPROCESS] Working query: "${workingQuery}"`);
 
     // CRITICAL: Extract entities BEFORE lowercasing to preserve proper noun capitalization
-    // Extract vendor names and product names from original query (with capitalization)
+    // Extract vendor names and product names from corrected query (with capitalization)
     const vendorInfo = this.extractVendorNames(trimmedQuery);
     const productInfo = this.extractProductNames(trimmedQuery, vendorInfo.vendorNames || []);
 
@@ -252,8 +277,10 @@ export class QueryPreprocessingService {
     const finalNormalized = normalizedQuery.trim();
     this.logger.debug(`[NER] Final normalized query for embedding: "${finalNormalized}"`);
     
-    const finalResult = {
+    const finalResult: PreprocessedQuery = {
       normalizedQuery: finalNormalized,
+      originalQuery: originalQueryText,
+      correctedQuery,
       ...dateInfo,
       ...amountInfo,
       vendorNames: vendorInfo.vendorNames,
