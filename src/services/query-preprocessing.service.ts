@@ -605,7 +605,12 @@ export class QueryPreprocessingService {
           // Extract number from money text (e.g., "$100" -> 100, "₹404436.62" -> 404436.62)
           // Handle currency symbols by matching number anywhere in the string
           // Try multiple patterns to extract the number
-          let numMatch = text.match(/([\d,]+\.?\d*)/);
+          // First try Indian number format (e.g., 10,61,714.91)
+          let numMatch = text.match(/(\d{1,2}(?:,\d{2,3})*(?:,\d{3})*(?:\.\d+)?)/);
+          if (!numMatch) {
+            // Try standard format with commas
+            numMatch = text.match(/([\d,]+\.?\d*)/);
+          }
           if (!numMatch) {
             // Try without commas
             numMatch = text.match(/(\d+\.?\d*)/);
@@ -657,7 +662,24 @@ export class QueryPreprocessingService {
       };
     }
 
-    // Multiple amounts - use as range
+    // Multiple amounts found - if they're very different, likely one is a partial match
+    // Use the largest amount as the primary amount with tolerance
+    // Note: At this point uniqueAmounts.length must be > 1 (already handled length === 0 and === 1)
+    const largestAmount = uniqueAmounts[uniqueAmounts.length - 1];
+    const smallestAmount = uniqueAmounts[0];
+    
+    // If the smallest is much smaller (< 0.5% of largest), it's likely a partial match from Indian number format - ignore it
+    // Indian format like "10,61,714.91" can be parsed as "10,61" (1061) and "714.91" separately
+    if (smallestAmount < largestAmount * 0.005) {
+      this.logger.debug(`[NER] Ignoring partial amount match: ${smallestAmount} (using ${largestAmount} instead)`);
+      const tolerance = largestAmount * 0.1;
+      return {
+        amountMin: Math.max(0, largestAmount - tolerance),
+        amountMax: largestAmount + tolerance,
+      };
+    }
+    
+    // Otherwise use as range
     return {
       amountMin: uniqueAmounts[0],
       amountMax: uniqueAmounts[uniqueAmounts.length - 1],
@@ -678,6 +700,9 @@ export class QueryPreprocessingService {
    */
   private getAmountPatterns(): RegExp[] {
     return [
+      // Indian number format with multiple commas (e.g., ₹10,61,714.91) - must be first
+      /[₹$€£]\s*(\d{1,2}(?:,\d{2,3})*(?:,\d{3})*(?:\.\d+)?)/g,
+      // Standard currency format
       /[₹$€£]\s*(\d+(?:[.,]\d+)?)/g,
       /(?:rupees?|rs\.?|dollars?|usd|eur|gbp)\s+(\d+(?:[.,]\d+)?)/gi,
       /(\d+(?:[.,]\d+)?)\s*(?:rupees?|rs\.?|dollars?|usd|eur|gbp)/gi,
@@ -711,6 +736,9 @@ export class QueryPreprocessingService {
    */
   private removeAmountText(query: string): string {
     const patterns = [
+      // Indian number format with multiple commas (e.g., ₹10,61,714.91)
+      /[₹$€£]\s*\d{1,2}(?:,\d{2,3})*(?:,\d{3})*(?:\.\d+)?/g,
+      // Standard currency format
       /[₹$€£]\s*\d+(?:[.,]\d+)?/g,
       /(?:rupees?|rs\.?|dollars?|usd|eur|gbp)\s+\d+(?:[.,]\d+)?/gi,
       /\d+(?:[.,]\d+)?\s*(?:rupees?|rs\.?|dollars?|usd|eur|gbp)/gi,
@@ -718,12 +746,16 @@ export class QueryPreprocessingService {
       /\d+(?:[.,]\d+)?\s+to\s+\d+(?:[.,]\d+)?/gi,
       /\b(?:around|about|approximately|approx)\s+\d+(?:[.,]\d+)?/gi,
       /\b\d{4,}\.\d+\b/g,
+      // Clean up leftover comma-separated numbers
+      /,\d+\.?\d*/g,
     ];
 
     let cleaned = query;
     for (const pattern of patterns) {
       cleaned = cleaned.replace(pattern, ' ');
     }
+    // Clean up multiple spaces
+    cleaned = cleaned.replace(/\s+/g, ' ').trim();
     return cleaned;
   }
 

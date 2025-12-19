@@ -103,6 +103,13 @@ export class FuzzyMatchingService {
         continue;
       }
 
+      // Skip date patterns (e.g., "26-01-2025", "2025-01-26", "01/26/2025")
+      if (/^\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}$/.test(word) || /^\d{4}[-\/]\d{1,2}[-\/]\d{1,2}$/.test(word)) {
+        this.logger.debug(`[FUZZY] Skipping "${word}" - date pattern`);
+        correctedWords.push(word);
+        continue;
+      }
+
       // Skip if word contains special characters (dates, amounts)
       if (/[₹$€£@#%]/.test(word)) {
         correctedWords.push(word);
