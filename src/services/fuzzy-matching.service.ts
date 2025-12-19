@@ -81,11 +81,14 @@ export class FuzzyMatchingService {
     let correctedQuery = query;
 
     // 1. First try to match multi-word vendor/product names (most important)
-    correctedQuery = this.correctMultiWordEntities(correctedQuery);
+    const { corrected, matchedEntities } = this.correctMultiWordEntities(correctedQuery);
+    correctedQuery = corrected;
 
     // 2. Then correct individual words using phonetic matching for names
+    // But skip words that are already part of matched multi-word entities
     const words = correctedQuery.split(/(\s+)/);
     const correctedWords: string[] = [];
+    const queryLower = correctedQuery.toLowerCase();
 
     for (const word of words) {
       // Skip whitespace
@@ -106,8 +109,24 @@ export class FuzzyMatchingService {
         continue;
       }
 
+      // Check if this word is already part of a matched multi-word entity
+      const wordLower = word.toLowerCase();
+      const isPartOfMatchedEntity = matchedEntities.some(entity => {
+        const entityLower = entity.toLowerCase();
+        const entityWords = entityLower.split(/\s+/);
+        // Check if word is one of the words in the entity and entity exists in the query
+        return entityWords.includes(wordLower) && queryLower.includes(entityLower);
+      });
+
+      if (isPartOfMatchedEntity) {
+        // Word is already part of a matched entity, keep it as is
+        this.logger.debug(`[FUZZY] Skipping "${word}" - already part of matched entity`);
+        correctedWords.push(word);
+        continue;
+      }
+
       // Use async phonetic matching for proper correction of names
-      const corrected = await this.correctSingleWordAsync(word);
+      const corrected = await this.correctSingleWordAsync(word, correctedQuery, matchedEntities);
       correctedWords.push(corrected);
     }
 
@@ -122,9 +141,11 @@ export class FuzzyMatchingService {
 
   /**
    * Correct multi-word entities (vendor names, product names) in the query
+   * Returns both the corrected query and the list of matched entities
    */
-  private correctMultiWordEntities(query: string): string {
+  private correctMultiWordEntities(query: string): { corrected: string; matchedEntities: string[] } {
     let result = query;
+    const matchedEntities: string[] = [];
     
     // Count multi-word vendors for debugging
     const multiWordVendors = this.vendorList.filter(v => v.split(/\s+/).length >= 2);
@@ -140,6 +161,7 @@ export class FuzzyMatchingService {
       if (vendorMatch) {
         this.logger.debug(`[FUZZY] Multi-word vendor match: "${vendorMatch}" → "${vendor}"`);
         result = result.replace(vendorMatch, vendor);
+        matchedEntities.push(vendor);
       }
     }
 
@@ -152,10 +174,11 @@ export class FuzzyMatchingService {
       if (productMatch) {
         this.logger.debug(`[FUZZY] Multi-word product match: "${productMatch}" → "${product}"`);
         result = result.replace(productMatch, product);
+        matchedEntities.push(product);
       }
     }
 
-    return result;
+    return { corrected: result, matchedEntities };
   }
 
   /**
@@ -262,7 +285,11 @@ export class FuzzyMatchingService {
    * Corrects a single word using phonetic matching (async version for names)
    * Uses PostgreSQL fuzzystrmatch for phonetic similarity
    */
-  private async correctSingleWordAsync(word: string): Promise<string> {
+  private async correctSingleWordAsync(
+    word: string,
+    currentQuery: string,
+    matchedEntities: string[] = []
+  ): Promise<string> {
     const wordLower = word.toLowerCase();
     
     // Skip phonetic matching for static dictionary words (action, domain, keyword words)
@@ -275,8 +302,35 @@ export class FuzzyMatchingService {
     // (both capitalized like "Gowrav" and lowercase like "gowrav")
     const phoneticMatch = await this.phoneticMatchVendor(word);
     if (phoneticMatch.wasChanged && phoneticMatch.confidence > 0.5) {
-      this.logger.debug(`[PHONETIC] Vendor match: "${word}" → "${phoneticMatch.corrected}" (confidence: ${phoneticMatch.confidence.toFixed(2)})`);
-      return phoneticMatch.corrected;
+      const vendorName = phoneticMatch.corrected;
+      const vendorWords = vendorName.split(/\s+/);
+      const currentQueryLower = currentQuery.toLowerCase();
+      
+      // Check if the full vendor name is already in the query (as a matched entity or already present)
+      const vendorAlreadyInQuery = matchedEntities.some(entity => 
+        entity.toLowerCase() === vendorName.toLowerCase()
+      ) || currentQueryLower.includes(vendorName.toLowerCase());
+      
+      if (vendorAlreadyInQuery) {
+        // Vendor name already in query, return just the first word to avoid duplication
+        this.logger.debug(
+          `[PHONETIC] Vendor "${vendorName}" already in query, returning first word only: "${word}" → "${vendorWords[0]}" (confidence: ${phoneticMatch.confidence.toFixed(2)})`
+        );
+        return vendorWords[0];
+      }
+      
+      // Only return full vendor name if it's a single word or very high confidence
+      // For multi-word vendors, return only first word to avoid duplication
+      if (vendorWords.length === 1 || phoneticMatch.confidence >= 0.95) {
+        this.logger.debug(`[PHONETIC] Vendor match: "${word}" → "${vendorName}" (confidence: ${phoneticMatch.confidence.toFixed(2)})`);
+        return vendorName;
+      } else {
+        // Multi-word vendor with moderate confidence - return first word only
+        this.logger.debug(
+          `[PHONETIC] Vendor match (first word only to avoid duplication): "${word}" → "${vendorWords[0]}" (full: "${vendorName}", confidence: ${phoneticMatch.confidence.toFixed(2)})`
+        );
+        return vendorWords[0];
+      }
     }
 
     // Fall back to synchronous matching
@@ -442,7 +496,16 @@ export class FuzzyMatchingService {
         // 2. Metaphone matches OR
         // 3. Edit distance <= 2 and phonetic_score > 0.5
         if (best.soundex_match || best.metaphone_match || (best.edit_distance <= 2 && best.phonetic_score > 0.5)) {
-          const confidence = Math.max(0, Math.min(1, best.phonetic_score));
+          // Boost confidence for soundex/metaphone matches (they're strong phonetic indicators)
+          let confidence = Math.max(0, Math.min(1, best.phonetic_score));
+          if (best.soundex_match && best.metaphone_match) {
+            // Both match - very high confidence
+            confidence = Math.max(confidence, 0.7);
+          } else if (best.soundex_match || best.metaphone_match) {
+            // One matches - good confidence
+            confidence = Math.max(confidence, 0.6);
+          }
+          
           return {
             original: word,
             corrected: best.vendor_name,

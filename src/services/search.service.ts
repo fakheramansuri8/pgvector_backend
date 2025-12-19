@@ -130,6 +130,7 @@ export class SearchService {
         narration: string | null;
         totalAmount: number | string;
         similarityScore: number;
+        dbEmbedding?: string;
       }>;
 
       if (hasSemanticContent) {
@@ -137,6 +138,7 @@ export class SearchService {
         this.logger.log(`[SEARCH] Generating embedding for: "${normalizedQuery}"`);
         const queryEmbedding = await this.embeddingService.generateEmbedding(normalizedQuery);
         this.logger.log(`[SEARCH] Embedding generated, length: ${queryEmbedding.length}`);
+        
         const embeddingStr = `[${queryEmbedding.join(',')}]`;
         replacements.queryEmbedding = embeddingStr;
 
@@ -145,28 +147,167 @@ export class SearchService {
           ? `embedding IS NOT NULL AND ${whereClause}`
           : 'embedding IS NOT NULL';
 
-        results = await this.purchaseInvoiceModel.sequelize?.query(
-          `
-          SELECT 
-            id,
-            "invoiceNumber",
-            "invoiceDate",
-            "vendorName",
-            "vendorReference",
-            "billNumber",
-            narration,
-            "totalAmount",
-            1 - (embedding <=> :queryEmbedding::vector) as "similarityScore"
-          FROM "PurchaseInvoice"
-          WHERE ${embeddingWhereClause}
-          ORDER BY embedding <=> :queryEmbedding::vector ASC
-          LIMIT :limit
-          `,
-          {
-            replacements,
-            type: QueryTypes.SELECT,
-          },
-        ) as typeof results;
+        this.logger.log(`[SEARCH] Executing vector similarity search (limit: ${limit})`);
+        this.logger.log(`[SEARCH] WHERE clause: ${embeddingWhereClause}`);
+        this.logger.log(`[SEARCH] Replacements: limit=${replacements.limit}, queryEmbedding length=${(replacements.queryEmbedding as string)?.length || 0}`);
+        
+        try {
+          // Workaround: Fetch ALL invoices without ORDER BY (which causes issues), then sort in JavaScript
+          // ORDER BY with vector operator consistently returns 0 results, even with literal strings
+          // Since we can't use ORDER BY, we need to fetch all invoices to ensure we get the best matches
+          const querySql = `
+            SELECT 
+              id,
+              "invoiceNumber",
+              "invoiceDate",
+              "vendorName",
+              "vendorReference",
+              "billNumber",
+              narration,
+              "totalAmount",
+              embedding::text as "dbEmbedding",
+              1 - (embedding <=> '${embeddingStr}'::vector) as "similarityScore"
+            FROM "PurchaseInvoice"
+            WHERE ${embeddingWhereClause}
+          `;
+          
+          this.logger.log(`[SEARCH] About to execute main query (fetching all invoices, will sort and take top ${limit})...`);
+          const rawResults = await this.purchaseInvoiceModel.sequelize?.query(
+            querySql,
+            {
+              replacements,
+              type: QueryTypes.SELECT,
+            },
+          ) as typeof results;
+          
+          // Sort by similarity score in JavaScript (descending - highest similarity first)
+          if (rawResults && Array.isArray(rawResults)) {
+            const sorted = rawResults.sort((a, b) => {
+              const scoreA = Number(a.similarityScore) || 0;
+              const scoreB = Number(b.similarityScore) || 0;
+              return scoreB - scoreA; // Descending order (highest similarity first)
+            });
+            // Take only the top 'limit' results
+            results = sorted.slice(0, limit);
+            this.logger.log(`[SEARCH] Main query completed. Fetched ${rawResults.length} results, returning top ${results.length} (sorted by similarity)`);
+          } else {
+            results = [];
+            this.logger.warn(`[SEARCH] Results is not an array: ${typeof rawResults}`);
+          }
+          if (results && results.length > 0) {
+            this.logger.log(`[SEARCH] First result: id=${results[0].id}, vendor="${results[0].vendorName}", similarity=${(results[0].similarityScore as number).toFixed(4)}`);
+          } else {
+            // Test: Try queries to diagnose the issue
+            this.logger.log(`[SEARCH] Testing diagnostic queries...`);
+            
+            // Test 1: Simple query without ORDER BY
+            try {
+              const testResults1 = await this.purchaseInvoiceModel.sequelize?.query(
+                `
+                SELECT 
+                  id,
+                  "vendorName",
+                  1 - (embedding <=> :queryEmbedding::vector) as "similarityScore"
+                FROM "PurchaseInvoice"
+                WHERE embedding IS NOT NULL
+                LIMIT 5
+                `,
+                {
+                  replacements: { queryEmbedding: embeddingStr },
+                  type: QueryTypes.SELECT,
+                }
+              ) as Array<{ id: number; vendorName: string; similarityScore: number }>;
+              
+              if (testResults1 && testResults1.length > 0) {
+                this.logger.log(`[SEARCH] Test 1 (no ORDER BY): Found ${testResults1.length} results`);
+              } else {
+                this.logger.warn(`[SEARCH] Test 1 (no ORDER BY): 0 results`);
+              }
+            } catch (testError) {
+              this.logger.error(`[SEARCH] Error in test 1:`, testError);
+            }
+            
+            // Test 2: Query with ORDER BY (like main query)
+            try {
+              const testResults2 = await this.purchaseInvoiceModel.sequelize?.query(
+                `
+                SELECT 
+                  id,
+                  "vendorName",
+                  1 - (embedding <=> :queryEmbedding::vector) as "similarityScore"
+                FROM "PurchaseInvoice"
+                WHERE embedding IS NOT NULL
+                ORDER BY embedding <=> :queryEmbedding::vector ASC
+                LIMIT 5
+                `,
+                {
+                  replacements: { queryEmbedding: embeddingStr },
+                  type: QueryTypes.SELECT,
+                }
+              ) as Array<{ id: number; vendorName: string; similarityScore: number }>;
+              
+              if (testResults2 && testResults2.length > 0) {
+                this.logger.log(`[SEARCH] Test 2 (with ORDER BY): Found ${testResults2.length} results`);
+                testResults2.forEach((r, idx) => {
+                  this.logger.log(`[SEARCH] Test 2 result ${idx + 1}: id=${r.id}, vendor="${r.vendorName}", similarity=${r.similarityScore.toFixed(4)}`);
+                });
+              } else {
+                this.logger.warn(`[SEARCH] Test 2 (with ORDER BY): 0 results`);
+              }
+            } catch (testError) {
+              this.logger.error(`[SEARCH] Error in test 2:`, testError);
+            }
+          }
+        } catch (error) {
+          this.logger.error(`[SEARCH] Error executing main query:`, error);
+          this.logger.error(`[SEARCH] Error details:`, JSON.stringify(error, null, 2));
+          results = [];
+        }
+        
+        // Log retrieved results from database
+        if (results && results.length > 0) {
+          this.logger.log(`[SEARCH] Retrieved ${results.length} results from database`);
+          results.forEach((result, index) => {
+            const similarity = (result.similarityScore as number);
+            this.logger.log(
+              `[SEARCH] Result ${index + 1}: id=${result.id}, vendor="${result.vendorName}", similarity=${similarity.toFixed(4)}`
+            );
+          });
+        } else {
+          this.logger.warn(`[SEARCH] No results found for query: "${normalizedQuery}"`);
+          
+          // Quick diagnostic: Test vector comparison on the specific vendor invoice if mentioned
+          if (preprocessed.vendorNames && preprocessed.vendorNames.length > 0) {
+            try {
+              const vendorName = preprocessed.vendorNames[0];
+              const directTest = await this.purchaseInvoiceModel.sequelize?.query(
+                `
+                SELECT 
+                  id,
+                  "vendorName",
+                  1 - (embedding <=> :queryEmbedding::vector) as "similarityScore"
+                FROM "PurchaseInvoice"
+                WHERE embedding IS NOT NULL 
+                  AND LOWER("vendorName") = LOWER(:vendorName)
+                LIMIT 1
+                `,
+                {
+                  replacements: {
+                    queryEmbedding: embeddingStr,
+                    vendorName: vendorName,
+                  },
+                  type: QueryTypes.SELECT,
+                }
+              ) as Array<{ id: number; vendorName: string; similarityScore: number }>;
+              
+              if (directTest && directTest.length > 0) {
+                this.logger.log(`[SEARCH] Direct test on "${vendorName}": id=${directTest[0].id}, similarity=${directTest[0].similarityScore.toFixed(4)}`);
+              }
+            } catch (error) {
+              this.logger.error(`[SEARCH] Error in direct vector test:`, error);
+            }
+          }
+        }
       } else {
         // No semantic content - just use filters, order by date descending
         this.logger.log(`[SEARCH] No semantic content - using filtered query only (no embedding)`);
@@ -198,17 +339,21 @@ export class SearchService {
         return [];
       }
 
-      return results.map((result) => ({
-        id: result.id,
-        invoiceNumber: result.invoiceNumber,
-        invoiceDate: result.invoiceDate,
-        vendorName: result.vendorName || '',
-        vendorReference: result.vendorReference || '',
-        billNumber: result.billNumber || '',
-        narration: result.narration || '',
-        totalAmount: Number(result.totalAmount) || 0,
-        similarityScore: Number(result.similarityScore) || 0,
-      }));
+      return results.map((result) => {
+        // Remove dbEmbedding from result before returning
+        const { dbEmbedding, ...rest } = result as any;
+        return {
+          id: rest.id,
+          invoiceNumber: rest.invoiceNumber,
+          invoiceDate: rest.invoiceDate,
+          vendorName: rest.vendorName || '',
+          vendorReference: rest.vendorReference || '',
+          billNumber: rest.billNumber || '',
+          narration: rest.narration || '',
+          totalAmount: Number(rest.totalAmount) || 0,
+          similarityScore: Number(rest.similarityScore) || 0,
+        };
+      });
     } catch (error) {
       this.logger.error('Error in semantic search:', error);
       throw error;

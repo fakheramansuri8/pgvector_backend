@@ -415,26 +415,70 @@ export class QueryPreprocessingService {
         return result;
       }
 
+      // Check for specific date pattern (day + month + year) BEFORE month+year pattern
+      // Matches: "11 december 2025", "11th december 2025", "december 11, 2025", etc.
+      const specificDateRegex = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${this.monthPattern})\\s+(\\d{4})\\b|\\b(${this.monthPattern})\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})\\b`);
+      const specificDateMatch = queryLower.match(specificDateRegex);
+      if (specificDateMatch) {
+        let day: number;
+        let monthName: string;
+        let year: number;
+        
+        // Check which pattern matched (day month year or month day year)
+        if (specificDateMatch[1]) {
+          // Pattern: "11 december 2025" or "11th december 2025"
+          day = parseInt(specificDateMatch[1], 10);
+          monthName = specificDateMatch[2];
+          year = parseInt(specificDateMatch[3], 10);
+        } else {
+          // Pattern: "december 11, 2025" or "december 11th, 2025"
+          monthName = specificDateMatch[4];
+          day = parseInt(specificDateMatch[5], 10);
+          year = parseInt(specificDateMatch[6], 10);
+        }
+        
+        const monthIndex = this.getMonthIndex(monthName);
+        const specificDate = new Date(year, monthIndex, day);
+        
+        // Validate the date (e.g., Feb 30 doesn't exist)
+        if (specificDate.getDate() === day && specificDate.getMonth() === monthIndex && specificDate.getFullYear() === year) {
+          this.logger.debug(`[NER] Found specific date pattern: ${day} ${monthName} ${year}`);
+          
+          const result = {
+            dateFrom: this.formatDate(specificDate),
+            dateTo: this.formatDate(specificDate),
+          };
+          this.logger.debug(`[NER] Extracted specific date: ${result.dateFrom}`);
+          return result;
+        }
+      }
+
       // Check for month + year pattern (e.g., "november 2025", "december 2024")
+      // Only match if NOT preceded by a day number (to avoid matching "11 december 2025")
       const monthYearRegex = new RegExp(`\\b(${this.monthPattern})\\s+(\\d{4})\\b`);
       const monthYearMatch = queryLower.match(monthYearRegex);
       if (monthYearMatch) {
-        const monthName = monthYearMatch[1];
-        const year = parseInt(monthYearMatch[2], 10);
-        const monthIndex = this.getMonthIndex(monthName);
-        
-        this.logger.debug(`[NER] Found month+year pattern: "${monthName} ${year}"`);
-        
-        // Get first and last day of that month
-        const firstDay = new Date(year, monthIndex, 1);
-        const lastDay = new Date(year, monthIndex + 1, 0); // Last day of month
-        
-        const result = {
-          dateFrom: this.formatDate(firstDay),
-          dateTo: this.formatDate(lastDay),
-        };
-        this.logger.debug(`[NER] Extracted month range: ${result.dateFrom} to ${result.dateTo}`);
-        return result;
+        const matchIndex = monthYearMatch.index || 0;
+        const beforeMatch = queryLower.substring(Math.max(0, matchIndex - 10), matchIndex);
+        // If there's a day number pattern before the month, skip this match (already handled by specific date check)
+        if (!/\d{1,2}(?:st|nd|rd|th)?\s+$/.test(beforeMatch)) {
+          const monthName = monthYearMatch[1];
+          const year = parseInt(monthYearMatch[2], 10);
+          const monthIndex = this.getMonthIndex(monthName);
+          
+          this.logger.debug(`[NER] Found month+year pattern: "${monthName} ${year}"`);
+          
+          // Get first and last day of that month
+          const firstDay = new Date(year, monthIndex, 1);
+          const lastDay = new Date(year, monthIndex + 1, 0); // Last day of month
+          
+          const result = {
+            dateFrom: this.formatDate(firstDay),
+            dateTo: this.formatDate(lastDay),
+          };
+          this.logger.debug(`[NER] Extracted month range: ${result.dateFrom} to ${result.dateTo}`);
+          return result;
+        }
       }
 
       // Parse dates from the query with current date as reference
